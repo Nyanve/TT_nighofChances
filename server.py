@@ -19,7 +19,7 @@ CHOICES = {
 }
 
 DEMO_RECEIPT = {
-    "merchant": "Lidl (demo receipt)",
+    "merchant": "Lidl (sample receipt)",
     "items": [
         {"name": "Rožok 10x", "price": 1.20},
         {"name": "Mlieko 1,5% 1l", "price": 0.99},
@@ -79,8 +79,8 @@ def results():
 
 
 def scan(data_url):
-    """Read a receipt photo with Claude. Without an API key, returns a demo receipt."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    """Read a receipt photo with Claude. No photo (sample button) or no API key: demo receipt."""
+    if not data_url or not os.environ.get("ANTHROPIC_API_KEY"):
         return DEMO_RECEIPT
     header, _, b64 = data_url.partition(",")
     media = header.removeprefix("data:").removesuffix(";base64")

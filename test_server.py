@@ -35,6 +35,7 @@ assert r["pain_freq"]["Often"] == 1 and r["signup"] == 1 and r["jtbd"]["Group tr
 
 code, receipt = post("/api/scan", {"image": "data:image/jpeg;base64,AAAA"})
 assert code == 200 and receipt["demo"] and receipt["items"], receipt
+assert post("/api/scan", {})[1]["demo"]  # "Try a sample" button sends no image
 
 page = urllib.request.urlopen(base + "/results").read().decode()
 assert "/*CHOICES*/" not in page and '"pain_freq"' in page

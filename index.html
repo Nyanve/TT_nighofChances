@@ -112,7 +112,8 @@ async function api(path, body) {
   if (!r.ok) throw new Error(data.error);
   return data;
 }
-const track = (kind, value) => api('/api/event', { kind, value }).catch(() => {});
+const TEST = new URLSearchParams(location.search).has('test'); // ?test=1: team testing, not counted in /results
+const track = (kind, value) => TEST ? Promise.resolve() : api('/api/event', { kind, value }).catch(() => {});
 
 function toast(msg) {
   const t = $('toast');
@@ -206,7 +207,7 @@ const evenly = () => receipt.items.forEach(i => { i.who = [...receipt.people]; }
 async function scanReceipt(file) {
   $('split').innerHTML = '<h1>Reading receipt…</h1><div class="card muted">This takes a few seconds.</div>';
   try {
-    const r = await api('/api/scan', { image: await toDataURL(file) });
+    const r = await api('/api/scan', { image: file ? await toDataURL(file) : '' });
     receipt = {
       merchant: r.merchant || 'Receipt',
       total: Math.round(r.total * 100),
@@ -214,7 +215,7 @@ async function scanReceipt(file) {
       items: r.items.map(i => ({ name: i.name, cents: Math.round(i.price * 100), who: [] })),
     };
     evenly();
-    if (r.demo) toast('No API key on the server, showing a demo receipt');
+    if (file && r.demo) toast('No API key on the server, showing a sample receipt');
   } catch (e) {
     toast(e.message || 'Scan failed');
   }
@@ -228,6 +229,7 @@ function renderSplit() {
         <p>Snap the receipt, tag who had what, and everyone gets a payment request.</p>
         <label class="btn wide" for="photo">📷 Scan receipt</label>
         <input id="photo" type="file" accept="image/*" capture="environment" hidden>
+        <button class="ghost wide" id="sample">No receipt at hand? Try a sample</button>
       </div>`;
     $('photo').onchange = e => e.target.files[0] && scanReceipt(e.target.files[0]);
     return;
@@ -268,6 +270,7 @@ $('split').onclick = e => {
   } else if (d.item) toggle(receipt.items[d.item].who, d.who);
   else if (e.target.id === 'even') evenly();
   else if (e.target.id === 'rescan') receipt = null;
+  else if (e.target.id === 'sample') return scanReceipt(null);
   else if (e.target.id === 'send') {
     const totals = split(receipt.items, receipt.people);
     for (const p of receipt.people) {
