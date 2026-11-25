@@ -101,6 +101,24 @@
   <button id="topupNo" class="ghost wide">Cancel</button>
 </dialog>
 
+<dialog id="reqDlg">
+  <form id="reqForm">
+    <h2>Request money or add a debt</h2>
+    <div class="chips" id="reqDir">
+      <button type="button" class="chip" data-dir="in" aria-pressed="true">They owe me</button>
+      <button type="button" class="chip" data-dir="out" aria-pressed="false">I owe them</button>
+    </div>
+    <label>Who?</label>
+    <div class="chips" id="reqWho"></div>
+    <label for="reqAmt">Amount each (€)</label>
+    <input id="reqAmt" type="number" min="0.01" step="0.01" required>
+    <label for="reqNote">What for?</label>
+    <input id="reqNote" required maxlength="40" placeholder="e.g. Concert tickets" autocomplete="off">
+    <p><button class="wide" id="reqGo" disabled>Send payment request</button></p>
+    <button type="button" class="ghost wide" id="reqNo">Cancel</button>
+  </form>
+</dialog>
+
 <dialog id="door">
   <form id="doorForm">
     <h2>Auto-split card payments</h2>
@@ -115,7 +133,7 @@
 <script>
 const CHOICES = /*CHOICES*/null; // injected by server.py, single source of allowed answers
 const PALETTE = ['#2563eb', '#db2777', '#7c3aed', '#ea580c', '#0891b2', '#65a30d', '#c026d3', '#dc2626'];
-const KEY = 'spolu3'; // bump when the saved state shape changes
+const KEY = 'spolu4'; // bump when the saved state shape changes
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
@@ -205,12 +223,26 @@ function simulatePayback(ids) {
   }, 3000 * (i + 1)));
 }
 
-function nextPaydays(d, n = 3) {
-  const now = new Date();
-  const m = now.getMonth() + (now.getDate() >= d ? 1 : 0);
-  return Array.from({ length: n }, (_, i) => new Date(now.getFullYear(), m + i, d));
+// The next n collection days (day d of the month) strictly after `from`.
+function nextPaydays(d, n, from) {
+  const m = from.getMonth() + (from.getDate() >= d ? 1 : 0);
+  return Array.from({ length: n }, (_, i) => new Date(from.getFullYear(), m + i, d));
 }
+console.assert(nextPaydays(1, 2, new Date(2026, 11, 1)).map(d => d.getMonth()).join() === '0,1', 'nextPaydays');
 const pactActive = p => p.mates.every(m => p.accepted.includes(m));
+const upcoming = (p, n = 3) => nextPaydays(p.payday, n, new Date(p.history.at(-1) ?? p.from));
+
+// Inkaso day: the bank pulls each flatmate's share into your account, then pays the landlord the full rent.
+function collectRent(p = S.pact) {
+  if (S.balance < p.shares.me) return false; // your own share has to be there
+  const date = upcoming(p, 1)[0];
+  const month = date.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  p.mates.forEach(m => move(p.shares[m], `Inkaso from ${nameOf(m)} · rent ${month}`));
+  move(-p.cents, `Rent ${month} · to landlord`);
+  p.history.push(+date);
+  save();
+  return true;
+}
 
 // ---------- Home ----------
 function renderHome() {
@@ -225,10 +257,10 @@ function renderHome() {
       <div class="muted">Main account · SK31 •••• 4821</div>
       <div class="big">${eur(S.balance)}</div>
       <div class="muted">Friends owe you ${eur(owedToYou)} · You owe ${eur(youOwe)}</div>
-      <p style="margin-bottom:0"><button class="soft" id="topup">+ Add money</button></p>
+      <p style="margin-bottom:0"><button class="soft" id="topup">+ Add money</button> <button class="soft" id="request">⇄ Request or add debt</button></p>
     </div>
     ${p ? `<div class="card"><b>Rent pact</b> · ${eur(p.cents)} / month
-      <div class="muted">${pactActive(p) ? `Active · next inkaso ${day(nextPaydays(p.payday, 1)[0])}` : `${p.accepted.length} of ${p.mates.length} flatmates approved the inkaso`}</div></div>` : ''}
+      <div class="muted">${pactActive(p) ? `Inkaso active · next collection ${day(upcoming(p, 1)[0])}` : `${p.accepted.length} of ${p.mates.length} flatmates approved the inkaso`}</div></div>` : ''}
     <button class="soft wide" id="doorBtn">⚡ Auto-split my card payments</button>
     <h2>Friends</h2>
     <div class="card">
@@ -261,6 +293,7 @@ $('home').onclick = e => {
   if (id === 'doorBtn') { track('fake_door_click', 'click'); return $('door').showModal(); }
   if (id === 'logout') { localStorage.removeItem('user'); return show('login'); }
   if (id === 'topup') return $('topupDlg').showModal();
+  if (id === 'request') return openRequest();
   if (id === 'reset' && confirm('Reset all demo data?')) { localStorage.removeItem(KEY); return location.reload(); }
   if (d.remind) {
     const text = `Hi ${nameOf(d.remind)}, you owe me ${eur(net(d.remind))} (${notesWith(d.remind)}). Pay it in one tap in Spolu: ${location.origin}`;
@@ -303,6 +336,44 @@ $('topupDlg').onclick = e => {
   toast(`Added ${eur(cents)}`);
 };
 
+// ---------- Request money / add a debt by hand ----------
+let reqDir = 'in'; // in: they owe me (request sent), out: I owe them
+const picked = box => [...box.querySelectorAll('[aria-pressed=true]')].map(b => b.dataset.who);
+function openRequest() {
+  $('reqForm').reset();
+  $('reqWho').innerHTML = everyone().slice(1).map(f =>
+    `<button type="button" class="chip" data-who="${f}" aria-pressed="false">${esc(nameOf(f))}</button>`).join('') || '<span class="muted">Add friends on Home first.</span>';
+  $('reqGo').disabled = true;
+  $('reqDlg').showModal();
+}
+$('reqDlg').onclick = e => {
+  const b = e.target;
+  if (b.id === 'reqNo') return $('reqDlg').close();
+  if (b.dataset.dir) {
+    reqDir = b.dataset.dir;
+    for (const c of $('reqDir').children) c.setAttribute('aria-pressed', c === b);
+    $('reqGo').textContent = reqDir === 'in' ? 'Send payment request' : 'Add debt';
+  }
+  if (b.dataset.who) {
+    b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true');
+    $('reqGo').disabled = !picked($('reqWho')).length;
+  }
+};
+$('reqForm').onsubmit = e => {
+  e.preventDefault();
+  const ids = picked($('reqWho'));
+  const cents = Math.round($('reqAmt').value * 100), note = $('reqNote').value.trim();
+  ids.forEach(id => S.requests.push(reqDir === 'in'
+    ? { payer: id, payee: 'me', cents, note, paid: false }
+    : { payer: 'me', payee: id, cents, note, paid: false }));
+  save();
+  $('reqDlg').close();
+  renderHome();
+  if (reqDir === 'out') return toast('Debt added. Pay it from Home');
+  simulatePayback(ids);
+  toast(`Payment request sent to ${ids.map(nameOf).join(', ')}`);
+};
+
 // ---------- Split receipt ----------
 async function toDataURL(file) { // shrink phone photos before upload
   const img = await createImageBitmap(file);
@@ -325,7 +396,7 @@ async function scanReceipt(file) {
   try {
     const r = await api('/api/scan', { image: file ? await toDataURL(file) : '' });
     newReceipt(r.merchant || 'Receipt', r.items.map(i => ({ name: i.name, cents: Math.round(i.price * 100) })), Math.round(r.total * 100));
-    if (file && r.demo) toast('No API key on the server, showing a sample receipt');
+    if (file && r.demo) toast("Couldn't read that receipt, showing a sample");
   } catch (e) {
     toast(e.message || 'Scan failed');
   }
@@ -433,26 +504,44 @@ function renderRent() {
     return;
   }
   const active = pactActive(p);
+  const fromMates = p.cents - p.shares.me;
+  const kv = (k, v) => `<div class="row"><span class="grow muted">${k}</span>${v}</div>`;
   // ponytail: equal shares only; add per-person amounts when rooms differ in size.
   $('rent').innerHTML = `<h1>Rent pact</h1>
     <div class="card hero">
       <div class="muted">Monthly rent</div><div class="big">${eur(p.cents)}</div>
-      <div class="muted">${active ? `Active · inkaso collects shares on day ${p.payday} of every month` : 'Waiting for flatmates to approve the inkaso'}</div>
+      <div class="muted">${active ? `Inkaso active · next collection ${day(upcoming(p, 1)[0])}` : 'Waiting for flatmates to approve the inkaso in their bank'}</div>
     </div>
     <div class="card">
       ${p.mates.map(m => `<div class="row">${av(m)}<div class="grow">${esc(nameOf(m))}
         <div class="muted">${p.accepted.includes(m) ? 'Inkaso approved ✓' : 'Waiting for approval…'}</div></div><span class="amount">${eur(p.shares[m])}</span></div>`).join('')}
-      <div class="row">${av('me')}<div class="grow">You<div class="muted">pay the landlord</div></div><span class="amount">${eur(p.shares.me)}</span></div>
+      <div class="row">${av('me')}<div class="grow">You<div class="muted">collect the inkaso, pay the landlord</div></div><span class="amount">${eur(p.shares.me)}</span></div>
     </div>
-    ${active ? `<h2>Upcoming inkaso collections</h2><div class="card">${nextPaydays(p.payday).map(d =>
-      `<div class="row"><div class="grow">${day(d)}<div class="muted">from ${p.mates.length} flatmates</div></div><span class="amount">+${eur(p.cents - p.shares.me)}</span></div>`).join('')}</div>` : ''}
+    <div class="card"><b>Inkaso mandate</b>
+      ${kv('Collected by', 'You · SK31 •••• 4821')}
+      ${kv('Reference', p.ref)}
+      ${kv('Limit per flatmate', `up to ${eur(p.shares[p.mates[0]])} / month`)}
+      ${kv('Collection day', `${p.payday}. of every month`)}
+      ${kv('Valid', 'until cancelled')}
+      <p class="muted" style="margin-bottom:0">Flatmates get a heads-up 2 days before each collection and can cancel the mandate in their bank any time.</p>
+    </div>
+    ${active ? `<button class="wide" id="runInkaso">⚡ Run next collection now (demo)</button>
+      <h2>Upcoming collections</h2><div class="card">${upcoming(p).map(d =>
+      `<div class="row"><div class="grow">${day(d)}<div class="muted">from ${p.mates.length} flatmates</div></div><span class="amount">+${eur(fromMates)}</span></div>`).join('')}</div>` : ''}
+    ${p.history.length ? `<h2>Collected</h2><div class="card">${[...p.history].reverse().map(t =>
+      `<div class="row"><div class="grow">${day(new Date(t))}<div class="muted">landlord paid ${eur(p.cents)} ✓</div></div><span class="amount" style="color:var(--brand)">+${eur(fromMates)}</span></div>`).join('')}</div>` : ''}
     <button class="ghost wide" id="endPact">End pact</button>`;
 }
 
 $('rent').onclick = e => {
   const b = e.target;
   if (b.dataset.mate) b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true');
-  if (b.id === 'endPact' && confirm('End the rent pact?')) { S.pact = null; save(); renderRent(); }
+  if (b.id === 'runInkaso') {
+    if (!collectRent()) return toast('Not enough money for your share. Add money first');
+    toast(`Inkaso collected ${eur(S.pact.cents - S.pact.shares.me)}, landlord paid ${eur(S.pact.cents)}`);
+    renderRent();
+  }
+  if (b.id === 'endPact' && confirm('End the rent pact? The inkaso mandates get cancelled.')) { S.pact = null; save(); renderRent(); }
 };
 $('rent').onsubmit = e => {
   e.preventDefault();
@@ -460,7 +549,8 @@ $('rent').onsubmit = e => {
   if (!mates.length) return toast('Pick at least one flatmate');
   const cents = Math.round($('rentAmt').value * 100);
   const people = ['me', ...mates];
-  S.pact = { cents, payday: +$('payday').value, mates, shares: split([{ cents, who: people }], people), accepted: [] };
+  S.pact = { cents, payday: +$('payday').value, mates, shares: split([{ cents, who: people }], people), accepted: [],
+    from: Date.now(), history: [], ref: `SPOLU-${Date.now().toString(36).slice(-6).toUpperCase()}` };
   save();
   renderRent();
   simulateAccept();
@@ -564,6 +654,8 @@ if (location.pathname === '/results') {
     localStorage.visited = '1';
     track('visit', 'new');
   }
+  // Real inkaso: paydays that passed while the app was closed still get collected.
+  while (S.pact && pactActive(S.pact) && upcoming(S.pact, 1)[0] <= new Date() && collectRent());
   show(localStorage.user ? 'home' : 'login');
   surveyOnce();
   simulateAccept();

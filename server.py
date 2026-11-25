@@ -2,6 +2,7 @@
 import json
 import os
 import sqlite3
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -78,14 +79,56 @@ def results():
     return out
 
 
+PROMPT = ("This is a shop receipt. List every purchased item with its final price in EUR "
+          "(after any discount on that item). Skip subtotals, VAT lines and payment lines. "
+          "total is the amount paid. Keep item names as printed.")
+# same OpenRouter model reels-app OCRs carousels with; swap via env when it breaks
+VISION_MODEL = os.environ.get("VISION_MODEL", "meta-llama/llama-4-scout")
+
+
+def parse_receipt(text):
+    """Llama wraps JSON in prose/fences and may print Slovak '1,29' prices: salvage {...}, then check the shape."""
+    def money(v):
+        return round(float(str(v).replace(",", ".")), 2)
+    try:
+        raw = json.loads(text[text.index("{"): text.rindex("}") + 1])
+        items = [{"name": str(i["name"]), "price": money(i["price"])} for i in raw["items"]]
+        if not items:
+            raise ValueError
+        total = money(raw.get("total") or sum(i["price"] for i in items))
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ValueError("could not read this receipt")
+    return {"merchant": str(raw.get("merchant") or "Receipt"), "items": items, "total": total}
+
+
+def scan_vision(data_url):
+    """OpenRouter vision, ported from reels-app's slides stage. No response_format (llama-4-scout rejects it): parse_receipt salvages."""
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        json.dumps({
+            "model": VISION_MODEL,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": PROMPT + ' Return only JSON: {"merchant": "...", "items": [{"name": "...", "price": 1.29}], "total": 9.99}'},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ]}],
+        }).encode(),
+        {"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}", "Content-Type": "application/json", "User-Agent": "spolu/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return parse_receipt(json.load(r)["choices"][0]["message"]["content"])
+
+
 def scan(data_url):
-    """Read a receipt photo with Claude. No photo (sample button) or no API key: demo receipt."""
-    if not data_url or not os.environ.get("ANTHROPIC_API_KEY"):
+    """Read a receipt photo with Claude, else OpenRouter. No photo (sample button) or no API key: demo receipt."""
+    if not data_url or not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENROUTER_API_KEY")):
         return DEMO_RECEIPT
     header, _, b64 = data_url.partition(",")
     media = header.removeprefix("data:").removesuffix(";base64")
     if media not in ("image/jpeg", "image/png", "image/webp", "image/gif") or not b64:
         raise ValueError("not an image")
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return scan_vision(data_url)
 
     import anthropic  # only needed for real scans: pip install anthropic
 
@@ -98,9 +141,7 @@ def scan(data_url):
         output_config={"format": {"type": "json_schema", "schema": RECEIPT_SCHEMA}},
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
-            {"type": "text", "text": "This is a shop receipt. List every purchased item with its final price in EUR "
-                                     "(after any discount on that item). Skip subtotals, VAT lines and payment lines. "
-                                     "total is the amount paid. Keep item names as printed."},
+            {"type": "text", "text": PROMPT},
         ]}],
     )
     if response.stop_reason == "refusal":
@@ -136,7 +177,12 @@ class Handler(BaseHTTPRequestHandler):
                 save_event(body.get("kind"), body.get("value"))
                 return self.send(200, {"ok": True})
             if self.path == "/api/scan":
-                return self.send(200, scan(body.get("image", "")))
+                try:
+                    receipt = scan(body.get("image", ""))
+                except Exception as e:  # ponytail: any scan failure shows the sample so the demo never dead-ends
+                    self.log_error("scan failed: %r", e)
+                    receipt = DEMO_RECEIPT
+                return self.send(200, receipt)
             self.send(404, {"error": "not found"})
         except (ValueError, AttributeError) as e:  # json errors are ValueError too
             self.send(400, {"error": str(e)})

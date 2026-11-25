@@ -8,6 +8,7 @@ import urllib.request
 
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 os.environ.pop("ANTHROPIC_API_KEY", None)  # scan must fall back to the demo receipt
+os.environ.pop("OPENROUTER_API_KEY", None)
 import server
 
 srv = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
@@ -36,6 +37,19 @@ assert r["pain_freq"]["Often"] == 1 and r["signup"] == 1 and r["jtbd"]["Group tr
 code, receipt = post("/api/scan", {"image": "data:image/jpeg;base64,AAAA"})
 assert code == 200 and receipt["demo"] and receipt["items"], receipt
 assert post("/api/scan", {})[1]["demo"]  # "Try a sample" button sends no image
+os.environ["OPENROUTER_API_KEY"] = "x"
+server.scan_vision = lambda _: 1 / 0  # vision provider down: still get the sample, not an error
+assert post("/api/scan", {"image": "data:image/jpeg;base64,AAAA"})[1]["demo"]
+del os.environ["OPENROUTER_API_KEY"]
+
+r = server.parse_receipt('Sure!\n```json\n{"merchant": "Billa", "items": [{"name": "Rožok", "price": "0,15"}, {"name": "Pivo", "price": 1.29}]}\n```')
+assert r == {"merchant": "Billa", "items": [{"name": "Rožok", "price": 0.15}, {"name": "Pivo", "price": 1.29}], "total": 1.44}, r
+for bad in ("no json here", '{"items": []}', '{"items": [{"name": "x"}]}', '[1, 2]'):
+    try:
+        server.parse_receipt(bad)
+        raise AssertionError(bad)
+    except ValueError:
+        pass
 
 page = urllib.request.urlopen(base + "/results").read().decode()
 assert "/*CHOICES*/" not in page and '"pain_freq"' in page
