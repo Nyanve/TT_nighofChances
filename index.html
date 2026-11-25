@@ -43,12 +43,26 @@
   .bar i { display: block; height: 100%; background: var(--brand); }
   #toast { position: fixed; left: 50%; bottom: 88px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   #toast.show { opacity: 1; }
+  #login > div { min-height: 85vh; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
+  .google { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+  .apple { background: #000; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <section id="home"></section>
+  <!-- ponytail: placeholder login, any button signs you in. Swap for real OAuth / bank login after the MVP. -->
+  <section id="login" hidden>
+    <div>
+      <h1>Spolu</h1>
+      <p class="muted">Shared money with your flatmates and friends. Split receipts, share rent, no awkward asks.</p>
+      <button class="wide google" data-login="Google">Continue with Google</button>
+      <button class="wide apple" data-login="Apple">Continue with Apple</button>
+      <button class="ghost wide" data-login="email">Log in with email</button>
+      <p class="muted">Demo login: no real account is created.</p>
+    </div>
+  </section>
+  <section id="home" hidden></section>
   <section id="split" hidden></section>
   <section id="rent" hidden></section>
   <section id="results" hidden></section>
@@ -151,7 +165,8 @@ function renderHome() {
   const sum = f => open.filter(f).reduce((a, r) => a + r.cents, 0);
   const p = S.pact;
   $('home').innerHTML = `
-    <h1>Spolu</h1>
+    <div class="row" style="padding:0"><h1 class="grow">Spolu</h1><button class="ghost" id="logout">Log out</button></div>
+    <p class="muted" style="margin-top:-12px">Signed in with ${esc(localStorage.user)}</p>
     <div class="card hero">
       <div class="muted">Friends owe you</div>
       <div class="big">${eur(sum(r => r.payee === 'me'))}</div>
@@ -178,6 +193,7 @@ function requestRow(r) {
 $('home').onclick = e => {
   const d = e.target.dataset;
   if (e.target.id === 'doorBtn') { track('fake_door_click', 'click'); return $('door').showModal(); }
+  if (e.target.id === 'logout') { localStorage.removeItem('user'); return show('login'); }
   const r = S.requests.find(r => String(r.id) === (d.remind || d.paid || d.pay));
   if (!r) return;
   if (d.remind) {
@@ -405,26 +421,38 @@ $('doorForm').onsubmit = e => {
 };
 
 // ---------- Boot ----------
-const render = { home: renderHome, split: renderSplit, rent: renderRent, results: renderResults };
+const render = { login() {}, home: renderHome, split: renderSplit, rent: renderRent, results: renderResults };
 function show(t) {
   tab = t;
+  $('tabs').hidden = t === 'login' || t === 'results';
   for (const s of document.querySelectorAll('main > section')) s.hidden = s.id !== t;
   for (const b of document.querySelectorAll('nav button')) b.dataset.tab === t ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current');
   render[t]();
 }
 $('tabs').onclick = e => e.target.dataset.tab && show(e.target.dataset.tab);
 
+function surveyOnce() { // first time someone is signed in
+  if (!localStorage.user || localStorage.surveyed) return;
+  localStorage.surveyed = '1';
+  $('survey').showModal();
+}
+$('login').onclick = e => {
+  if (!e.target.dataset.login) return;
+  localStorage.user = e.target.dataset.login;
+  show('home');
+  surveyOnce();
+};
+
 if (location.pathname === '/results') {
-  $('tabs').hidden = true;
   show('results');
   setInterval(renderResults, 5000);
 } else {
-  show('home');
   if (!localStorage.visited) {
     localStorage.visited = '1';
     track('visit', 'new');
-    $('survey').showModal();
   }
+  show(localStorage.user ? 'home' : 'login');
+  surveyOnce();
   simulateAccept();
 }
 </script>
