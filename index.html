@@ -87,6 +87,17 @@
   <button id="surveySkip" class="ghost wide">Skip</button>
 </dialog>
 
+<dialog id="topupDlg">
+  <h2>Add money</h2>
+  <p class="muted">From your card •••• 1234 to your main account</p>
+  <div class="chips">
+    <button class="chip" data-add="2000">+20 €</button>
+    <button class="chip" data-add="5000">+50 €</button>
+    <button class="chip" data-add="10000">+100 €</button>
+  </div>
+  <button id="topupNo" class="ghost wide">Cancel</button>
+</dialog>
+
 <dialog id="door">
   <form id="doorForm">
     <h2>Auto-split card payments</h2>
@@ -111,12 +122,23 @@ const day = d => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short',
 const av = p => `<span class="av" style="background:${COLORS[p]}">${PEOPLE[p][0]}</span>`;
 const toggle = (arr, x) => arr.includes(x) ? arr.splice(arr.indexOf(x), 1) : arr.push(x);
 
-// ponytail: demo state lives in localStorage (no accounts); requests and pacts are per device.
-const S = JSON.parse(localStorage.spolu || 'null') || {
-  requests: [{ id: 1, payer: 'me', payee: 'zuzka', cents: 1250, note: 'Pizza on Friday', paid: false }],
+// ponytail: demo state lives in localStorage (no accounts); money, requests and pacts are per device.
+const DAY = 864e5;
+const S = JSON.parse(localStorage.spolu2 || 'null') || {
+  balance: 84230,
+  tx: [
+    { label: 'Part-time job · salary', cents: 62000, at: Date.now() - 3 * DAY },
+    { label: 'Bolt', cents: -690, at: Date.now() - 2 * DAY },
+    { label: 'Lidl', cents: -2340, at: Date.now() - DAY },
+  ],
+  requests: [
+    { id: 1, payer: 'tomas', payee: 'me', cents: 800, note: 'Cinema tickets', paid: false },
+    { id: 2, payer: 'me', payee: 'zuzka', cents: 1250, note: 'Pizza on Friday', paid: false },
+  ],
   pact: null,
 };
-const save = () => { localStorage.spolu = JSON.stringify(S); };
+const save = () => { localStorage.spolu2 = JSON.stringify(S); };
+const move = (cents, label) => { S.balance += cents; S.tx.push({ label, cents, at: Date.now() }); };
 let receipt = null; // { merchant, total, people: [ids], items: [{ name, cents, who: [ids] }] }
 let tab = 'home';
 
@@ -168,22 +190,40 @@ function renderHome() {
     <div class="row" style="padding:0"><h1 class="grow">Spolu</h1><button class="ghost" id="logout">Log out</button></div>
     <p class="muted" style="margin-top:-12px">Signed in with ${esc(localStorage.user)}</p>
     <div class="card hero">
-      <div class="muted">Friends owe you</div>
-      <div class="big">${eur(sum(r => r.payee === 'me'))}</div>
-      <div class="muted">You owe ${eur(sum(r => r.payer === 'me'))}</div>
+      <div class="muted">Main account · SK31 •••• 4821</div>
+      <div class="big">${eur(S.balance)}</div>
+      <div class="muted">Friends owe you ${eur(sum(r => r.payee === 'me'))} · You owe ${eur(sum(r => r.payer === 'me'))}</div>
+      <p style="margin-bottom:0"><button class="soft" id="topup">+ Add money</button></p>
     </div>
     ${p ? `<div class="card"><b>Rent pact</b> · ${eur(p.cents)} / month
       <div class="muted">${pactActive(p) ? `Active · next transfer ${day(nextPaydays(p.payday, 1)[0])}` : `${p.accepted.length} of ${p.mates.length} flatmates accepted`}</div></div>` : ''}
     <button class="soft wide" id="doorBtn">⚡ Auto-split my card payments</button>
     <h2>Payment requests</h2>
-    <div class="card">${S.requests.length ? [...S.requests].reverse().map(requestRow).join('') : '<p class="muted">Nothing yet. Scan a receipt to split it.</p>'}</div>`;
+    <div class="card">${S.requests.length ? [...S.requests].reverse().map(requestRow).join('') : '<p class="muted">Nothing yet. Scan a receipt to split it.</p>'}</div>
+    <h2>Recent activity</h2>
+    <div class="card">${[...S.tx].reverse().slice(0, 6).map(t => `<div class="row">
+      <div class="grow">${esc(t.label)}<div class="muted">${new Date(t.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</div></div>
+      <span class="amount"${t.cents > 0 ? ' style="color:var(--brand)"' : ''}>${t.cents > 0 ? '+' : ''}${eur(t.cents)}</span></div>`).join('')}</div>
+    <button class="ghost wide" id="reset">Reset demo</button>`;
+}
+
+// ponytail: friends pay back on a timer for the demo; in real life it's a request in their bank app.
+function simulatePayback(reqs) {
+  reqs.forEach((r, i) => setTimeout(() => {
+    if (r.paid) return;
+    r.paid = true;
+    move(r.cents, `From ${PEOPLE[r.payer]} · ${r.note}`);
+    save();
+    toast(`${PEOPLE[r.payer]} paid you ${eur(r.cents)}`);
+    render[tab]();
+  }, 3000 * (i + 1)));
 }
 
 function requestRow(r) {
   const mine = r.payee === 'me';
   const friend = mine ? r.payer : r.payee;
   const action = r.paid ? '<span class="muted">Paid ✓</span>'
-    : mine ? `<button class="ghost" data-remind="${r.id}">Remind</button><button class="ghost" data-paid="${r.id}">Paid</button>`
+    : mine ? `<button class="ghost" data-remind="${r.id}">Remind</button>`
     : `<button data-pay="${r.id}">Pay</button>`;
   return `<div class="row">${av(friend)}
     <div class="grow">${mine ? `${PEOPLE[friend]} owes you` : `You owe ${PEOPLE[friend]}`} <span class="amount">${eur(r.cents)}</span>
@@ -194,17 +234,32 @@ $('home').onclick = e => {
   const d = e.target.dataset;
   if (e.target.id === 'doorBtn') { track('fake_door_click', 'click'); return $('door').showModal(); }
   if (e.target.id === 'logout') { localStorage.removeItem('user'); return show('login'); }
-  const r = S.requests.find(r => String(r.id) === (d.remind || d.paid || d.pay));
+  if (e.target.id === 'topup') return $('topupDlg').showModal();
+  if (e.target.id === 'reset' && confirm('Reset all demo data?')) { localStorage.removeItem('spolu2'); return location.reload(); }
+  const r = S.requests.find(r => String(r.id) === (d.remind || d.pay));
   if (!r) return;
   if (d.remind) {
     const text = `Hi ${PEOPLE[r.payer]}, your share for ${r.note} is ${eur(r.cents)}. Pay it in one tap in Spolu: ${location.origin}`;
     return navigator.share ? navigator.share({ text }).catch(() => {})
       : navigator.clipboard.writeText(text).then(() => toast('Copied, paste it to your friend'));
   }
+  if (S.balance < r.cents) return toast('Not enough money. Add money first');
   r.paid = true;
+  move(-r.cents, `To ${PEOPLE[r.payee]} · ${r.note}`);
   save();
   renderHome();
-  toast(d.pay ? `Paid ${eur(r.cents)} to ${PEOPLE[r.payee]}` : 'Marked as paid');
+  toast(`Paid ${eur(r.cents)} to ${PEOPLE[r.payee]} from your main account`);
+};
+
+$('topupDlg').onclick = e => {
+  if (e.target.id === 'topupNo') return $('topupDlg').close();
+  if (!e.target.dataset.add) return;
+  const cents = +e.target.dataset.add;
+  move(cents, 'Top up from card •••• 1234');
+  save();
+  $('topupDlg').close();
+  renderHome();
+  toast(`Added ${eur(cents)}`);
 };
 
 // ---------- Split receipt ----------
@@ -289,12 +344,17 @@ $('split').onclick = e => {
   else if (e.target.id === 'sample') return scanReceipt(null);
   else if (e.target.id === 'send') {
     const totals = split(receipt.items, receipt.people);
+    const sent = [];
     for (const p of receipt.people) {
-      if (p !== 'me' && totals[p] > 0) S.requests.push({ id: S.requests.length + 1, payer: p, payee: 'me', cents: totals[p], note: receipt.merchant, paid: false });
+      if (p === 'me' || totals[p] <= 0) continue;
+      const r = { id: S.requests.length + 1, payer: p, payee: 'me', cents: totals[p], note: receipt.merchant, paid: false };
+      S.requests.push(r);
+      sent.push(r);
     }
     save();
     receipt = null;
     show('home');
+    simulatePayback(sent);
     return toast('Payment requests sent');
   } else return;
   renderSplit();
