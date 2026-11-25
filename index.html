@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spolu</title>
+<style>
+  :root { --bg:#f3f4f6; --card:#fff; --ink:#111827; --muted:#6b7280; --brand:#0f766e; --soft:#e6f2f1; --line:#e5e7eb; --warn:#b45309; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+  main { max-width: 480px; margin: 0 auto; padding: 16px 16px 96px; }
+  h1 { font-size: 1.5rem; margin: 8px 0 16px; }
+  h2 { font-size: 1.05rem; margin: 20px 0 8px; }
+  .card { background: var(--card); border-radius: 16px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 2px rgb(0 0 0 / .06); }
+  .hero { background: var(--brand); color: #fff; }
+  .hero .muted { color: rgb(255 255 255 / .85); }
+  .big { font-size: 2rem; font-weight: 700; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .warn { color: var(--warn); }
+  button, .btn { font: inherit; border: 0; border-radius: 12px; padding: 12px 16px; background: var(--brand); color: #fff; cursor: pointer; display: inline-block; text-align: center; }
+  button:disabled { opacity: .4; cursor: default; }
+  .ghost { background: transparent; color: var(--brand); padding: 8px 10px; }
+  .soft { background: var(--soft); color: var(--brand); }
+  .wide { width: 100%; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; }
+  .grow { flex: 1; min-width: 0; }
+  .av { width: 32px; height: 32px; padding: 0; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: .85rem; color: #fff; flex: none; }
+  .av.off { opacity: .2; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  .chip { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; }
+  .chip[aria-pressed=true] { background: var(--brand); color: #fff; border-color: var(--brand); }
+  .amount { font-weight: 600; white-space: nowrap; }
+  label { display: block; margin: 12px 0 6px; font-weight: 600; }
+  input { font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 12px; width: 100%; }
+  nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: center; background: var(--card); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
+  nav button { flex: 1; max-width: 160px; background: none; color: var(--muted); border-radius: 0; padding: 14px 0; }
+  nav button[aria-current=page] { color: var(--brand); font-weight: 600; }
+  dialog { border: 0; border-radius: 20px; padding: 20px; width: calc(100% - 32px); max-width: 420px; }
+  dialog::backdrop { background: rgb(0 0 0 / .4); }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .bar { background: var(--line); border-radius: 6px; height: 10px; overflow: hidden; margin-top: 4px; }
+  .bar i { display: block; height: 100%; background: var(--brand); }
+  #toast { position: fixed; left: 50%; bottom: 88px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section id="home"></section>
+  <section id="split" hidden></section>
+  <section id="rent" hidden></section>
+  <section id="results" hidden></section>
+</main>
+
+<nav id="tabs">
+  <button data-tab="home">Home</button>
+  <button data-tab="split">Split receipt</button>
+  <button data-tab="rent">Rent pact</button>
+</nav>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<dialog id="survey">
+  <h2>Quick question before you start</h2>
+  <p class="muted">What brought you here?</p>
+  <div class="chips" data-q="jtbd"></div>
+  <p class="muted">How often do you have to chase friends or flatmates for money?</p>
+  <div class="chips" data-q="pain_freq"></div>
+  <p class="muted">How annoying is it? (1 = not at all, 5 = very)</p>
+  <div class="chips" data-q="pain_annoy"></div>
+  <p><button id="surveyGo" class="wide" disabled>Continue</button></p>
+  <button id="surveySkip" class="ghost wide">Skip</button>
+</dialog>
+
+<dialog id="door">
+  <form id="doorForm">
+    <h2>Auto-split card payments</h2>
+    <p>This is coming soon. Want early access?</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" required autocomplete="email">
+    <p><button class="wide">Get early access</button></p>
+    <button type="button" id="doorNo" class="ghost wide">Not now</button>
+  </form>
+</dialog>
+
+<script>
+const CHOICES = /*CHOICES*/null; // injected by server.py, single source of allowed answers
+const PEOPLE = { me: 'You', marek: 'Marek', zuzka: 'Zuzka', tomas: 'Tomáš', lucia: 'Lucia' };
+const COLORS = { me: '#0f766e', marek: '#2563eb', zuzka: '#db2777', tomas: '#7c3aed', lucia: '#ea580c' };
+const FRIENDS = Object.keys(PEOPLE).filter(p => p !== 'me');
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const eur = c => (c / 100).toLocaleString('sk-SK', { style: 'currency', currency: 'EUR' });
+const day = d => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+const av = p => `<span class="av" style="background:${COLORS[p]}">${PEOPLE[p][0]}</span>`;
+const toggle = (arr, x) => arr.includes(x) ? arr.splice(arr.indexOf(x), 1) : arr.push(x);
+
+// ponytail: demo state lives in localStorage (no accounts); requests and pacts are per device.
+const S = JSON.parse(localStorage.spolu || 'null') || {
+  requests: [{ id: 1, payer: 'me', payee: 'zuzka', cents: 1250, note: 'Pizza on Friday', paid: false }],
+  pact: null,
+};
+const save = () => { localStorage.spolu = JSON.stringify(S); };
+let receipt = null; // { merchant, total, people: [ids], items: [{ name, cents, who: [ids] }] }
+let tab = 'home';
+
+async function api(path, body) {
+  const r = await fetch(path, body && { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error);
+  return data;
+}
+const track = (kind, value) => api('/api/event', { kind, value }).catch(() => {});
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t.timer);
+  t.timer = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// Split each item's cents among the people tagged on it. Leftover cents go to the
+// first tagged person in `people` order ("You" first), so the payer absorbs rounding.
+function split(items, people) {
+  const totals = Object.fromEntries(people.map(p => [p, 0]));
+  for (const it of items) {
+    const who = people.filter(p => it.who.includes(p));
+    if (!who.length) continue;
+    const base = Math.floor(it.cents / who.length);
+    let rest = it.cents - base * who.length;
+    for (const p of who) totals[p] += base + (rest-- > 0 ? 1 : 0);
+  }
+  return totals;
+}
+console.assert(JSON.stringify(split([{ cents: 100, who: ['b', 'a', 'c'] }, { cents: 5, who: ['c'] }], ['a', 'b', 'c'])) === '{"a":34,"b":33,"c":38}', 'split');
+
+function nextPaydays(d, n = 3) {
+  const now = new Date();
+  const m = now.getMonth() + (now.getDate() >= d ? 1 : 0);
+  return Array.from({ length: n }, (_, i) => new Date(now.getFullYear(), m + i, d));
+}
+const pactActive = p => p.mates.every(m => p.accepted.includes(m));
+
+// ---------- Home ----------
+function renderHome() {
+  const open = S.requests.filter(r => !r.paid);
+  const sum = f => open.filter(f).reduce((a, r) => a + r.cents, 0);
+  const p = S.pact;
+  $('home').innerHTML = `
+    <h1>Spolu</h1>
+    <div class="card hero">
+      <div class="muted">Friends owe you</div>
+      <div class="big">${eur(sum(r => r.payee === 'me'))}</div>
+      <div class="muted">You owe ${eur(sum(r => r.payer === 'me'))}</div>
+    </div>
+    ${p ? `<div class="card"><b>Rent pact</b> · ${eur(p.cents)} / month
+      <div class="muted">${pactActive(p) ? `Active · next transfer ${day(nextPaydays(p.payday, 1)[0])}` : `${p.accepted.length} of ${p.mates.length} flatmates accepted`}</div></div>` : ''}
+    <button class="soft wide" id="doorBtn">⚡ Auto-split my card payments</button>
+    <h2>Payment requests</h2>
+    <div class="card">${S.requests.length ? [...S.requests].reverse().map(requestRow).join('') : '<p class="muted">Nothing yet. Scan a receipt to split it.</p>'}</div>`;
+}
+
+function requestRow(r) {
+  const mine = r.payee === 'me';
+  const friend = mine ? r.payer : r.payee;
+  const action = r.paid ? '<span class="muted">Paid ✓</span>'
+    : mine ? `<button class="ghost" data-remind="${r.id}">Remind</button><button class="ghost" data-paid="${r.id}">Paid</button>`
+    : `<button data-pay="${r.id}">Pay</button>`;
+  return `<div class="row">${av(friend)}
+    <div class="grow">${mine ? `${PEOPLE[friend]} owes you` : `You owe ${PEOPLE[friend]}`} <span class="amount">${eur(r.cents)}</span>
+      <div class="muted">${esc(r.note)}</div></div>${action}</div>`;
+}
+
+$('home').onclick = e => {
+  const d = e.target.dataset;
+  if (e.target.id === 'doorBtn') { track('fake_door_click', 'click'); return $('door').showModal(); }
+  const r = S.requests.find(r => String(r.id) === (d.remind || d.paid || d.pay));
+  if (!r) return;
+  if (d.remind) {
+    const text = `Hi ${PEOPLE[r.payer]}, your share for ${r.note} is ${eur(r.cents)}. Pay it in one tap in Spolu: ${location.origin}`;
+    return navigator.share ? navigator.share({ text }).catch(() => {})
+      : navigator.clipboard.writeText(text).then(() => toast('Copied, paste it to your friend'));
+  }
+  r.paid = true;
+  save();
+  renderHome();
+  toast(d.pay ? `Paid ${eur(r.cents)} to ${PEOPLE[r.payee]}` : 'Marked as paid');
+};
+
+// ---------- Split receipt ----------
+async function toDataURL(file) { // shrink phone photos before upload
+  const img = await createImageBitmap(file);
+  const s = Math.min(1, 1600 / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.width * s);
+  c.height = Math.round(img.height * s);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+
+const evenly = () => receipt.items.forEach(i => { i.who = [...receipt.people]; });
+
+async function scanReceipt(file) {
+  $('split').innerHTML = '<h1>Reading receipt…</h1><div class="card muted">This takes a few seconds.</div>';
+  try {
+    const r = await api('/api/scan', { image: await toDataURL(file) });
+    receipt = {
+      merchant: r.merchant || 'Receipt',
+      total: Math.round(r.total * 100),
+      people: ['me', 'marek', 'zuzka'],
+      items: r.items.map(i => ({ name: i.name, cents: Math.round(i.price * 100), who: [] })),
+    };
+    evenly();
+    if (r.demo) toast('No API key on the server, showing a demo receipt');
+  } catch (e) {
+    toast(e.message || 'Scan failed');
+  }
+  renderSplit();
+}
+
+function renderSplit() {
+  if (!receipt) {
+    $('split').innerHTML = `<h1>Split a receipt</h1>
+      <div class="card">
+        <p>Snap the receipt, tag who had what, and everyone gets a payment request.</p>
+        <label class="btn wide" for="photo">📷 Scan receipt</label>
+        <input id="photo" type="file" accept="image/*" capture="environment" hidden>
+      </div>`;
+    $('photo').onchange = e => e.target.files[0] && scanReceipt(e.target.files[0]);
+    return;
+  }
+  const totals = split(receipt.items, receipt.people);
+  const itemsSum = receipt.items.reduce((a, i) => a + i.cents, 0);
+  const unassigned = receipt.items.filter(i => !i.who.length).reduce((a, i) => a + i.cents, 0);
+  const canSend = !unassigned && receipt.people.some(p => p !== 'me');
+  $('split').innerHTML = `<h1>${esc(receipt.merchant)}</h1>
+    <div class="card"><b>Who was there?</b>
+      <div class="chips">${Object.keys(PEOPLE).map(p =>
+        `<button class="chip" data-person="${p}" aria-pressed="${receipt.people.includes(p)}">${PEOPLE[p]}</button>`).join('')}</div>
+    </div>
+    <div class="card">
+      <div class="muted">Everything starts split evenly. Tap a face to untag someone who didn't have that item.</div>
+      ${receipt.items.map((it, i) => `<div class="row">
+        <div class="grow">${esc(it.name)}<div class="muted">${eur(it.cents)}</div></div>
+        ${receipt.people.map(p => `<button class="av${it.who.includes(p) ? '' : ' off'}" style="background:${COLORS[p]}"
+          data-item="${i}" data-who="${p}" aria-pressed="${it.who.includes(p)}" aria-label="${PEOPLE[p]}: ${esc(it.name)}">${PEOPLE[p][0]}</button>`).join('')}
+      </div>`).join('')}
+      ${itemsSum !== receipt.total ? `<p class="muted">Items add up to ${eur(itemsSum)}, the receipt says ${eur(receipt.total)}.</p>` : ''}
+    </div>
+    <div class="card">
+      ${receipt.people.map(p => `<div class="row">${av(p)}<div class="grow">${PEOPLE[p]}</div><span class="amount">${eur(totals[p])}</span></div>`).join('')}
+      ${unassigned ? `<p class="warn">${eur(unassigned)} isn't tagged to anyone yet.</p>` : ''}
+    </div>
+    <button class="wide" id="send" ${canSend ? '' : 'disabled'}>Send payment requests</button>
+    <button class="ghost wide" id="even">Split everything evenly</button>
+    <button class="ghost wide" id="rescan">Scan another receipt</button>`;
+}
+
+$('split').onclick = e => {
+  const d = e.target.dataset;
+  if (d.person) {
+    toggle(receipt.people, d.person);
+    receipt.people = Object.keys(PEOPLE).filter(p => receipt.people.includes(p));
+    evenly();
+  } else if (d.item) toggle(receipt.items[d.item].who, d.who);
+  else if (e.target.id === 'even') evenly();
+  else if (e.target.id === 'rescan') receipt = null;
+  else if (e.target.id === 'send') {
+    const totals = split(receipt.items, receipt.people);
+    for (const p of receipt.people) {
+      if (p !== 'me' && totals[p] > 0) S.requests.push({ id: S.requests.length + 1, payer: p, payee: 'me', cents: totals[p], note: receipt.merchant, paid: false });
+    }
+    save();
+    receipt = null;
+    show('home');
+    return toast('Payment requests sent');
+  } else return;
+  renderSplit();
+};
+
+// ---------- Rent pact ----------
+function renderRent() {
+  const p = S.pact;
+  if (!p) {
+    $('rent').innerHTML = `<h1>Rent pact</h1>
+      <div class="card">
+        <p>You pay the landlord. Your flatmates agree once, and their share reaches you automatically every month. Nobody has to ask.</p>
+        <form id="pactForm">
+          <label for="rentAmt">Monthly rent (€)</label>
+          <input id="rentAmt" type="number" min="1" step="0.01" required value="750">
+          <label>Flatmates</label>
+          <div class="chips">${FRIENDS.map(f => `<button type="button" class="chip" data-mate="${f}" aria-pressed="${f === 'marek' || f === 'zuzka'}">${PEOPLE[f]}</button>`).join('')}</div>
+          <label for="payday">Transfer day (day of the month)</label>
+          <input id="payday" type="number" min="1" max="28" required value="1">
+          <p><button class="wide">Send pact to flatmates</button></p>
+        </form>
+      </div>`;
+    return;
+  }
+  const active = pactActive(p);
+  // ponytail: equal shares only; add per-person amounts when rooms differ in size.
+  $('rent').innerHTML = `<h1>Rent pact</h1>
+    <div class="card hero">
+      <div class="muted">Monthly rent</div><div class="big">${eur(p.cents)}</div>
+      <div class="muted">${active ? `Active · shares arrive on day ${p.payday} of every month` : 'Waiting for flatmates to accept'}</div>
+    </div>
+    <div class="card">
+      ${p.mates.map(m => `<div class="row">${av(m)}<div class="grow">${PEOPLE[m]}
+        <div class="muted">${p.accepted.includes(m) ? 'Accepted ✓' : 'Pending…'}</div></div><span class="amount">${eur(p.shares[m])}</span></div>`).join('')}
+      <div class="row">${av('me')}<div class="grow">You<div class="muted">pay the landlord</div></div><span class="amount">${eur(p.shares.me)}</span></div>
+    </div>
+    ${active ? `<h2>Upcoming transfers to you</h2><div class="card">${nextPaydays(p.payday).map(d =>
+      `<div class="row"><div class="grow">${day(d)}<div class="muted">from ${p.mates.length} flatmates</div></div><span class="amount">+${eur(p.cents - p.shares.me)}</span></div>`).join('')}</div>` : ''}
+    <button class="ghost wide" id="endPact">End pact</button>`;
+}
+
+$('rent').onclick = e => {
+  const b = e.target;
+  if (b.dataset.mate) b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true');
+  if (b.id === 'endPact' && confirm('End the rent pact?')) { S.pact = null; save(); renderRent(); }
+};
+$('rent').onsubmit = e => {
+  e.preventDefault();
+  const mates = [...e.target.querySelectorAll('[aria-pressed=true]')].map(b => b.dataset.mate);
+  if (!mates.length) return toast('Pick at least one flatmate');
+  const cents = Math.round($('rentAmt').value * 100);
+  const people = ['me', ...mates];
+  S.pact = { cents, payday: +$('payday').value, mates, shares: split([{ cents, who: people }], people), accepted: [] };
+  save();
+  renderRent();
+  simulateAccept();
+};
+
+// ponytail: flatmates "accept" on a timer for the demo; real version sends them a consent request.
+function simulateAccept() {
+  const p = S.pact;
+  const next = p?.mates.find(m => !p.accepted.includes(m));
+  if (!next) return;
+  setTimeout(() => {
+    if (S.pact !== p) return;
+    p.accepted.push(next);
+    save();
+    if (pactActive(p)) toast('Everyone accepted. The rent pact is active');
+    render[tab]();
+    simulateAccept();
+  }, 1500);
+}
+
+// ---------- Hidden results dashboard (/results) ----------
+async function renderResults() {
+  const r = await api('/api/results').catch(() => null);
+  if (!r) return;
+  const total = o => Object.values(o).reduce((a, b) => a + b, 0);
+  const pct = (a, b) => b ? `${Math.round(a / b * 100)}%` : '–';
+  const visits = r.visit.new, answers = total(r.pain_freq), clicks = r.fake_door_click.click, rated = total(r.pain_annoy);
+  const avg = rated ? (Object.entries(r.pain_annoy).reduce((a, [k, v]) => a + k * v, 0) / rated).toFixed(1) : '–';
+  const stat = (label, value, sub = '') => `<div class="card"><div class="muted">${label}</div><div class="big">${value}</div><div class="muted">${sub}</div></div>`;
+  const bars = (title, o) => `<div class="card"><b>${title}</b>${Object.entries(o).map(([k, v]) => `
+    <div style="margin-top:10px">${esc(k)} <span class="muted">${v}</span><div class="bar"><i style="width:${total(o) ? v / total(o) * 100 : 0}%"></i></div></div>`).join('')}</div>`;
+  $('results').innerHTML = `<h1>Live results</h1>
+    <div class="stats">
+      ${stat('Visitors', visits)}
+      ${stat('Survey answers', answers)}
+      ${stat('Chase money often or all the time', pct(r.pain_freq.Often + r.pain_freq['All the time'], answers))}
+      ${stat('Average annoyance', avg, 'out of 5')}
+      ${stat('Fake-door clicks', clicks, `${pct(clicks, visits)} of visitors`)}
+      ${stat('Early-access emails', r.signup, `${pct(r.signup, visits)} of visitors`)}
+    </div>
+    ${bars('What brought you here?', r.jtbd)}
+    ${bars('How often do you chase money?', r.pain_freq)}
+    ${bars('How annoying is it? (1–5)', r.pain_annoy)}`;
+}
+
+// ---------- Survey + fake door ----------
+const answers = {};
+for (const box of document.querySelectorAll('[data-q]')) {
+  box.innerHTML = CHOICES[box.dataset.q].map(v => `<button class="chip" data-v="${esc(v)}" aria-pressed="false">${esc(v)}</button>`).join('');
+}
+$('survey').onclick = e => {
+  const v = e.target.dataset.v;
+  if (v === undefined) return;
+  const box = e.target.parentElement;
+  answers[box.dataset.q] = v;
+  for (const b of box.children) b.setAttribute('aria-pressed', b === e.target);
+  $('surveyGo').disabled = Object.keys(answers).length < 3;
+};
+$('surveyGo').onclick = () => {
+  for (const [k, v] of Object.entries(answers)) track(k, v);
+  $('survey').close();
+  toast('Thanks! Welcome to Spolu');
+};
+$('surveySkip').onclick = () => $('survey').close();
+$('doorNo').onclick = () => $('door').close();
+$('doorForm').onsubmit = e => {
+  e.preventDefault();
+  track('signup', $('email').value.trim());
+  $('door').close();
+  toast("You're on the early-access list");
+};
+
+// ---------- Boot ----------
+const render = { home: renderHome, split: renderSplit, rent: renderRent, results: renderResults };
+function show(t) {
+  tab = t;
+  for (const s of document.querySelectorAll('main > section')) s.hidden = s.id !== t;
+  for (const b of document.querySelectorAll('nav button')) b.dataset.tab === t ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current');
+  render[t]();
+}
+$('tabs').onclick = e => e.target.dataset.tab && show(e.target.dataset.tab);
+
+if (location.pathname === '/results') {
+  $('tabs').hidden = true;
+  show('results');
+  setInterval(renderResults, 5000);
+} else {
+  show('home');
+  if (!localStorage.visited) {
+    localStorage.visited = '1';
+    track('visit', 'new');
+    $('survey').showModal();
+  }
+  simulateAccept();
+}
+</script>
+</body>
+</html>
